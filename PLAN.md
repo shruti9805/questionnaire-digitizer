@@ -457,3 +457,20 @@ have silently resolved to the wrong column.
   ingestion, automated Likert detection, manual demographic entry, human review, per-response and
   cumulative Excel export) is now fully implemented and verified against the real sample data from
   the start of this session. Moving to Stage 3 (release readiness) next.
+- 2026-09-15: User feedback while testing their own real data (a different phase than the sample
+  used throughout this session): wanted the Excel export's four sections on one sheet instead of
+  four tabs. Tagged git ref `checkpoint-multi-tab-export` at the prior commit before making the
+  change, since this is a scoped output-format tweak, not a re-run of Stage 0-1. Explicitly did
+  NOT touch checkbox_pipeline.py, parse_docx.py, or any detection/alignment logic — export.py only.
+  `build_workbook`/`build_batch_workbook` now write all four sections (Demographics, Likert
+  Responses, Wide Format, Extraction Notes) to one "Response" sheet, stacked with a bold section
+  title and a blank row between each; each section's own columns, headers, values, and cell
+  formatting (borders, wrap text) are otherwise unchanged from the four-tab version. Column widths
+  are now shared across sections that use the same column letter - resolved via a `_widen()`
+  helper that only ever increases a column's width, so e.g. column A ends up wide enough for both
+  Demographics' field labels and Likert's Sr.No without either section looking cramped. Verified:
+  re-ran both exporters against the seeded test data, confirmed exactly one sheet named "Response"
+  in each, confirmed all four section titles appear in the expected order and at correct row
+  offsets, and confirmed ER_5/PC_3's values are unchanged from the multi-tab version (data content
+  wasn't touched, only layout). Also confirmed no errors in the live running app against the user's
+  own real phase/batch data (not just this session's synthetic sample).
