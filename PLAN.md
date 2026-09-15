@@ -1,5 +1,5 @@
 # Questionnaire Digitizer — Build Plan
-Last updated: 2026-09-15 | Current stage: 2 | Current component: 2 (schema ingestion)
+Last updated: 2026-09-15 | Current stage: 2 | Current component: 3 (checkbox pipeline port)
 
 ## 1. Product summary
 A local desktop/web tool that turns scanned paper research questionnaires (bilingual,
@@ -107,7 +107,7 @@ scanned PDF (per batch)     ──▶  pdftoppm @300dpi ──▶ page PNGs     
 | # | Component | Why now | Depends on | Done when | Status |
 |---|---|---|---|---|---|
 | 1 | Walking skeleton | Proves toolchain: Streamlit app runs, SQLite created, file upload works | — | A blank Streamlit app launches locally, accepts a .docx upload, and writes a row to SQLite | Done |
-| 2 | Schema ingestion | Needed before any scan can be interpreted; low technical risk but blocks everything else | 1 | Uploading the real bilingual .docx produces the correct 71-item schema + 8 demographic fields in SQLite, verified against this session's hand-transcribed list | Not started |
+| 2 | Schema ingestion | Needed before any scan can be interpreted; low technical risk but blocks everything else | 1 | Uploading the real bilingual .docx produces the correct 71-item schema + 8 demographic fields in SQLite, verified against this session's hand-transcribed list | Done |
 | 3 | Checkbox pipeline port | Highest technical risk — must generalize the session's hand-tuned, single-document pipeline to arbitrary page geometry without a human re-tuning thresholds each time | 1 | Running the pipeline on the same sample PDF used this session reproduces the same 71 values without manual threshold changes, including correctly flagging the DS_6 and AS_2 boundary cases rather than silently guessing | Not started |
 | 4 | Review UI | Where the human-in-the-loop promise is delivered, and where demographic fields get entered (manually, per the v1 scope cut) | 2,3 | For the sample PDF, every Likert field the pipeline was unsure about is shown with its source crop; demographic fields have a working entry form next to the page image; both write back to SQLite | Not started |
 | 5 | Excel export | Ties it together into the actual deliverable | 4 | Exporting the sample PDF's reviewed response produces a workbook matching this session's hand-built one in structure and values | Not started |
@@ -336,3 +336,18 @@ tested on a second document.
   has no programmatic file-input control) — the upload button's code path (`create_phase`) was
   instead verified directly, and the widget itself was confirmed to render and accept the intended
   file type. Git repo initialized for the project.
+- 2026-09-15: Component 2 (schema ingestion) done. `parse_docx.py` parses the phase docx's two
+  tables (demographics, Likert items) using the exact cell-text structure verified directly against
+  the real template (English/Hindi split on the first line-break inside a Likert statement cell;
+  demographic option lists split on the "☐" glyph). Verified: parsing the real
+  `Student_Survey_Bilingual.docx` produces 71 items whose codes match, in order, the 71 codes
+  hand-transcribed earlier this session from the scanned PDF (exact list diff, zero mismatches);
+  8 demographic fields correctly typed as text vs. single_choice with correct option lists.
+  Negative path verified too: a docx without the expected 2-table structure raises
+  `SchemaParseError` with a clear message instead of misparsing silently. `db.py` schema updated
+  (items/demo_fields gained proper EN/HI + type/options columns) and `save_schema`/`get_items`/
+  `get_demo_fields` added. Wired into `app.py` and confirmed live in a running browser session:
+  the saved phase's full schema (all 8 demo fields with options, all 71 items) renders correctly
+  in the UI. Learned: Python 3.9 (the system interpreter) rejects the `X | None` union type-hint
+  syntax without `from __future__ import annotations` — added where needed; worth checking any
+  new file against this before assuming modern type-hint syntax is safe to use.
