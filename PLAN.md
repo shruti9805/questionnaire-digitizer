@@ -574,3 +574,18 @@ have silently resolved to the wrong column.
   team) and that response data itself doesn't persist beyond one working session (see the schema
   vs. response-data persistence split above) - but worth revisiting if the audience or data
   sensitivity changes.
+- 2026-09-15: Fixed a real deploy-blocking bug, caught by the user sending two deploy logs 10
+  minutes apart. Both stopped at the identical point - "Resolved 41 packages in ~550ms" (uv's
+  dependency resolution), no further output, then a full restart cycle. Root cause: pinning
+  `numpy==2.0.2` / `pillow==11.3.0` in requirements.txt (added in the deployment-prep commit,
+  matching versions installed on the local dev machine's Python 3.9) forced pip/uv to try to
+  install those exact versions on Streamlit Cloud's actual runtime - confirmed from the log as
+  "Using Python 3.14.7 environment." numpy 2.0.2 predates Python 3.14's existence and almost
+  certainly has no prebuilt wheel for it, meaning the installer would fall back to compiling numpy
+  from source - consistent with the build hanging/timing out at exactly that point, twice,
+  identically. Fix: unpinned numpy and pillow in requirements.txt, letting the resolver pick
+  versions with real 3.14 wheels instead of being forced to match my local, older environment.
+  Lesson for future sessions: pinning dependency versions "for reproducibility" is only safe when
+  the target runtime is verified to match what was pinned against - pinning against a local dev
+  environment's Python version without checking the actual deploy target's Python version is a
+  real way to silently break a cloud deploy, not a hardening step by default.
