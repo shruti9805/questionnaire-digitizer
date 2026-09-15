@@ -367,6 +367,8 @@ class ItemResult:
     value: int | None
     confidence: str
     note: str | None
+    source: str | None  # e.g. "page-3.png:R" - which rendered page/half the mark came from
+    y: float | None  # y-coordinate within that half-page image, for crop generation
 
 
 def align_document_to_items(pdf_path: str, items: list, work_dir: str) -> tuple[list[ItemResult] | None, AlignmentResult]:
@@ -378,7 +380,31 @@ def align_document_to_items(pdf_path: str, items: list, work_dir: str) -> tuple[
         return None, result
     item_results = [
         ItemResult(item_id=items[a.schema_index]["id"], code=items[a.schema_index]["code"],
-                   value=a.value, confidence=a.confidence, note=a.note)
+                   value=a.value, confidence=a.confidence, note=a.note, source=a.source, y=a.y)
         for a in result.aligned
     ]
     return item_results, result
+
+
+def list_rendered_pages(work_dir: str) -> list[str]:
+    """Filenames (not full paths) of the rendered page PNGs in a batch's
+    working directory, in page order."""
+    pages = sorted(Path(work_dir).glob("page-*.png"), key=lambda p: int(p.stem.split("-")[-1]))
+    return [p.name for p in pages]
+
+
+def crop_source_region(work_dir: str, source: str, y: float, half_width_px: int = 130) -> Image.Image | None:
+    """Re-derive the half-page image a detection came from (page filename +
+    L/R side, e.g. "page-3.png:R") and crop a horizontal band around y for
+    display in a review UI. Returns None if the source page is missing."""
+    if not source or y is None:
+        return None
+    page_name, _, side = source.partition(":")
+    page_path = Path(work_dir) / page_name
+    if not page_path.exists():
+        return None
+    left, right = split_halves(str(page_path))
+    rgb = left if side == "L" else right
+    h = rgb.shape[0]
+    y0, y1 = max(0, int(y) - half_width_px), min(h, int(y) + half_width_px)
+    return Image.fromarray(rgb[y0:y1, :])

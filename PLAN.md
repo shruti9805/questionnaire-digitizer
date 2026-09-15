@@ -1,5 +1,5 @@
 # Questionnaire Digitizer — Build Plan
-Last updated: 2026-09-15 | Current stage: 2 | Current component: 4 (review UI)
+Last updated: 2026-09-15 | Current stage: 2 | Current component: 5 (Excel export)
 
 ## 1. Product summary
 A local desktop/web tool that turns scanned paper research questionnaires (bilingual,
@@ -109,7 +109,7 @@ scanned PDF (per batch)     ──▶  pdftoppm @300dpi ──▶ page PNGs     
 | 1 | Walking skeleton | Proves toolchain: Streamlit app runs, SQLite created, file upload works | — | A blank Streamlit app launches locally, accepts a .docx upload, and writes a row to SQLite | Done |
 | 2 | Schema ingestion | Needed before any scan can be interpreted; low technical risk but blocks everything else | 1 | Uploading the real bilingual .docx produces the correct 71-item schema + 8 demographic fields in SQLite, verified against this session's hand-transcribed list | Done |
 | 3 | Checkbox pipeline port | Highest technical risk — must generalize the session's hand-tuned, single-document pipeline to arbitrary page geometry without a human re-tuning thresholds each time | 1 | Running the pipeline on the same sample PDF used this session reproduces the same 71 values without manual threshold changes, including correctly flagging the DS_6 and AS_2 boundary cases rather than silently guessing | Done |
-| 4 | Review UI | Where the human-in-the-loop promise is delivered, and where demographic fields get entered (manually, per the v1 scope cut) | 2,3 | For the sample PDF, every Likert field the pipeline was unsure about is shown with its source crop; demographic fields have a working entry form next to the page image; both write back to SQLite | Not started |
+| 4 | Review UI | Where the human-in-the-loop promise is delivered, and where demographic fields get entered (manually, per the v1 scope cut) | 2,3 | For the sample PDF, every Likert field the pipeline was unsure about is shown with its source crop; demographic fields have a working entry form next to the page image; both write back to SQLite | Done |
 | 5 | Excel export | Ties it together into the actual deliverable | 4 | Exporting the sample PDF's reviewed response produces a workbook matching this session's hand-built one in structure and values | Not started |
 | 6 | Batch mode | Needed for "hundreds of respondents", not just one | 2–5 | Importing multiple scanned PDFs under one phase produces one cumulative export with one row per respondent | Not started |
 
@@ -396,3 +396,26 @@ have silently resolved to the wrong column.
   across a page break) must be resolved by a geometric heuristic (column-match + top-of-half
   position, calibrated against this session's real boundary cases) rather than a schema-derived
   expectation.
+- 2026-09-15: Component 4 (review UI) done. Added a "Process & review" tab to `app.py`: upload a
+  scanned PDF for a phase, runs the checkbox pipeline, and persists a `batch`/`response`/
+  `response_items` set to SQLite (new db.py functions: create_batch, create_response,
+  save_response_items, get_response_items, update_response_item, save/get_response_demo_value(s),
+  get_phase). Flagged Likert items (confidence != "ok") are shown one at a time with their source
+  crop (checkbox_pipeline.crop_source_region, re-derives the half-page image + a band around the
+  detected y-coordinate) and a value selector; confirming writes the correction back and flips
+  confidence to "ok". Demographic fields get a plain entry form next to a page-image reference
+  selector (Done-when explicitly wanted the form "next to the page image" — since v1 has no
+  vision, there's no way to know which page has the demographics table automatically, so the
+  reference image is just browsable across all rendered pages of the batch, not auto-located).
+  Verified end-to-end in a live browser session against the real sample PDF: seeded a phase +
+  processed batch/response (71 items, 10 flagged) via the same functions the UI calls, then drove
+  the actual running app — filled and saved all demographic fields (persisted and correctly
+  re-populated on reload), confirmed the PC_3 conflict item (the near-boundary case from component
+  3) with its crop visibly showing column 3, and confirmed ER_5.
+  Testing-tool finding, not an app bug: the browser automation's generic form_input did not
+  reliably set Streamlit's selectbox (a custom widget, not a native `<select>`) — a first attempt
+  to correct PC_3 this way silently saved the previous default value instead of the intended
+  correction. Confirmed by checking SQLite directly, then re-verified with a real click-driven
+  interaction (open dropdown, click the option), which correctly saved the intended value. No
+  application code was at fault; noting this here in case a future session hits the same
+  appearance-of-a-bug during testing.

@@ -5,6 +5,8 @@ response_items) even though component 1 only exercises `phases`, so later
 components don't need a migration step. Each function opens and closes its
 own connection - this is a low-concurrency local tool, not a pooled service.
 """
+from __future__ import annotations
+
 import json
 import sqlite3
 from pathlib import Path
@@ -43,6 +45,7 @@ CREATE TABLE IF NOT EXISTS batches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     phase_id INTEGER NOT NULL REFERENCES phases(id),
     source_pdf_filename TEXT NOT NULL,
+    pages_dir TEXT NOT NULL,
     uploaded_at TEXT NOT NULL
 );
 
@@ -56,7 +59,8 @@ CREATE TABLE IF NOT EXISTS response_demo_values (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     response_id INTEGER NOT NULL REFERENCES responses(id),
     demo_field_id INTEGER NOT NULL REFERENCES demo_fields(id),
-    value TEXT
+    value TEXT,
+    UNIQUE(response_id, demo_field_id)
 );
 
 CREATE TABLE IF NOT EXISTS response_items (
@@ -65,7 +69,10 @@ CREATE TABLE IF NOT EXISTS response_items (
     item_id INTEGER NOT NULL REFERENCES items(id),
     value INTEGER,
     confidence TEXT NOT NULL DEFAULT 'ok',
-    note TEXT
+    note TEXT,
+    source TEXT,
+    y REAL,
+    UNIQUE(response_id, item_id)
 );
 """
 
@@ -153,6 +160,132 @@ def get_items(phase_id: int) -> list[sqlite3.Row]:
             "WHERE phase_id = ? ORDER BY position",
             (phase_id,),
         ).fetchall()
+    finally:
+        conn.close()
+
+
+def get_phase(phase_id: int) -> sqlite3.Row | None:
+    conn = get_connection()
+    try:
+        return conn.execute("SELECT * FROM phases WHERE id = ?", (phase_id,)).fetchone()
+    finally:
+        conn.close()
+
+
+def create_batch(phase_id: int, source_pdf_filename: str, pages_dir: str) -> int:
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "INSERT INTO batches (phase_id, source_pdf_filename, pages_dir, uploaded_at) VALUES (?, ?, ?, ?)",
+            (phase_id, source_pdf_filename, pages_dir, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def list_batches(phase_id: int) -> list[sqlite3.Row]:
+    conn = get_connection()
+    try:
+        return conn.execute(
+            "SELECT id, source_pdf_filename, pages_dir, uploaded_at FROM batches "
+            "WHERE phase_id = ? ORDER BY id DESC",
+            (phase_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def create_response(batch_id: int, respondent_label: str | None = None) -> int:
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "INSERT INTO responses (batch_id, respondent_label) VALUES (?, ?)",
+            (batch_id, respondent_label),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def list_responses(batch_id: int) -> list[sqlite3.Row]:
+    conn = get_connection()
+    try:
+        return conn.execute(
+            "SELECT id, respondent_label FROM responses WHERE batch_id = ? ORDER BY id",
+            (batch_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def save_response_items(response_id: int, item_results: list) -> None:
+    """item_results: list of checkbox_pipeline.ItemResult."""
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM response_items WHERE response_id = ?", (response_id,))
+        conn.executemany(
+            "INSERT INTO response_items (response_id, item_id, value, confidence, note, source, y) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (response_id, r.item_id, r.value, r.confidence, r.note, r.source, r.y)
+                for r in item_results
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_response_items(response_id: int) -> list[sqlite3.Row]:
+    conn = get_connection()
+    try:
+        return conn.execute(
+            "SELECT ri.id, ri.item_id, ri.value, ri.confidence, ri.note, ri.source, ri.y, "
+            "       it.code, it.statement_en, it.position "
+            "FROM response_items ri JOIN items it ON it.id = ri.item_id "
+            "WHERE ri.response_id = ? ORDER BY it.position",
+            (response_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def update_response_item(response_item_id: int, value: int, confidence: str = "ok") -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE response_items SET value = ?, confidence = ? WHERE id = ?",
+            (value, confidence, response_item_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def save_response_demo_value(response_id: int, demo_field_id: int, value: str) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO response_demo_values (response_id, demo_field_id, value) VALUES (?, ?, ?) "
+            "ON CONFLICT(response_id, demo_field_id) DO UPDATE SET value = excluded.value",
+            (response_id, demo_field_id, value),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_response_demo_values(response_id: int) -> dict[int, str]:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT demo_field_id, value FROM response_demo_values WHERE response_id = ?",
+            (response_id,),
+        ).fetchall()
+        return {r["demo_field_id"]: r["value"] for r in rows}
     finally:
         conn.close()
 
