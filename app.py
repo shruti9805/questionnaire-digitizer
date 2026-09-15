@@ -236,9 +236,11 @@ with tab_process:
                     with st.container(border=True):
                         st.markdown(f"**{ri['code']}** — {ri['statement_en']}")
                         st.caption(f"{ri['confidence']}: {ri['note']}")
-                        crop = crop_source_region(response_row["pages_dir"], ri["source"], ri["y"])
+                        crop, crop_error = crop_source_region(response_row["pages_dir"], ri["source"], ri["y"])
                         if crop is not None:
                             st.image(crop, width="stretch")
+                        else:
+                            st.warning(f"Source image unavailable: {crop_error}")
                         col1, col2 = st.columns([1, 3])
                         with col1:
                             corrected = st.selectbox(

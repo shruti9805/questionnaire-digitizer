@@ -416,18 +416,34 @@ def list_rendered_pages(work_dir: str) -> list[str]:
     return [p.name for p in pages]
 
 
-def crop_source_region(work_dir: str, source: str, y: float, half_width_px: int = 130) -> Image.Image | None:
+def crop_source_region(work_dir: str, source: str, y: float, half_width_px: int = 130):
     """Re-derive the half-page image a detection came from (page filename +
     L/R side, e.g. "page-3.png:R") and crop a horizontal band around y for
-    display in a review UI. Returns None if the source page is missing."""
+    display in a review UI.
+
+    Returns (image, None) on success, or (None, reason) on failure - a
+    plain None return with no explanation was hard to debug against an
+    intermittent failure reported on the deployed app (works sometimes,
+    not others, for the same response, no redeploy in between); this
+    makes the actual cause visible in the UI instead of silently blank."""
     if not source or y is None:
-        return None
+        return None, "no source/y recorded for this item"
+    work_path = Path(work_dir)
+    if not work_path.exists():
+        return None, f"working directory not found: {work_dir}"
     page_name, _, side = source.partition(":")
-    page_path = Path(work_dir) / page_name
+    page_path = work_path / page_name
     if not page_path.exists():
-        return None
-    left, right = split_halves(str(page_path))
-    rgb = left if side == "L" else right
-    h = rgb.shape[0]
-    y0, y1 = max(0, int(y) - half_width_px), min(h, int(y) + half_width_px)
-    return Image.fromarray(rgb[y0:y1, :])
+        try:
+            available = sorted(p.name for p in work_path.iterdir())
+        except OSError as e:
+            available = [f"<could not list directory: {e}>"]
+        return None, f"page image not found: {page_path} (directory contains: {available})"
+    try:
+        left, right = split_halves(str(page_path))
+        rgb = left if side == "L" else right
+        h = rgb.shape[0]
+        y0, y1 = max(0, int(y) - half_width_px), min(h, int(y) + half_width_px)
+        return Image.fromarray(rgb[y0:y1, :]), None
+    except Exception as e:
+        return None, f"error reading/cropping {page_path}: {e!r}"

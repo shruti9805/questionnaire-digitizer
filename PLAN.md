@@ -603,3 +603,15 @@ have silently resolved to the wrong column.
   Stage 3 (release readiness) for the deployment sub-effort: done. Remaining known limitation,
   already documented and accepted, not a bug: don't leave a batch processed-but-not-yet-reviewed
   across an app restart/sleep cycle.
+- 2026-09-15: User reported the missing-crop-image issue is intermittent - same response,
+  sometimes showing the image, sometimes not, with no redeploy in between, which the prior
+  "stale data from restart churn" explanation doesn't cover. `crop_source_region` previously
+  returned a bare `None` on any failure with no way to tell why; changed it to return
+  `(image_or_None, reason_or_None)`, distinguishing "working directory missing," "page file
+  missing" (with the directory's actual contents listed), and "error reading/cropping" (any
+  other exception, caught rather than left to crash the page). Wired into app.py: a failed crop
+  now shows the specific reason via `st.warning` instead of silently rendering nothing. Verified
+  both paths locally (missing-dir, missing-file, and a real success case against a freshly
+  processed response) before shipping - not yet root-caused, since the actual intermittent
+  failure hasn't recurred with this diagnostic in place yet. Next occurrence should surface an
+  actionable reason instead of an unexplained blank.
