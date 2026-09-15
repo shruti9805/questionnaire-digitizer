@@ -37,7 +37,8 @@ PRODUCT.md for full detail.
   page-break split) is surfaced in a review screen before export, not silently guessed.
 - Processing a ~70-item, 6-image questionnaire completes end-to-end (import → review-ready) in
   under 15 seconds on a normal laptop — this is now pure local image processing, no external API
-  call in the loop.
+  call in the loop. **Measured: 8.10s** for the real sample PDF (render + detect + align), checked
+  2026-09-15.
 
 ## 4. Technology decisions
 | # | Decision | Choice | Confidence |
