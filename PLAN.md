@@ -589,3 +589,17 @@ have silently resolved to the wrong column.
   the target runtime is verified to match what was pinned against - pinning against a local dev
   environment's Python version without checking the actual deploy target's Python version is a
   real way to silently break a cloud deploy, not a hardening step by default.
+- 2026-09-15: Deployment confirmed working end-to-end on Streamlit Community Cloud: login gate,
+  auto-loaded phase schema, PDF processing, review screen with source crops, all functioning on
+  the live app. One transient issue during verification: a response processed during the
+  numpy/pillow-fix redeploy churn showed no crop image for its flagged items (blank where the
+  image should be, no error). Diagnosed by asking the user to process a fresh PDF on the live app
+  as a control - the fresh response showed crops correctly, confirming this was stale data (that
+  particular response's rendered page images didn't survive one of the several restarts during
+  the fix, while its response_items rows happened to survive a different one) rather than a code
+  bug. This is a live instance of the exact tradeoff already documented in PRODUCT.md's deployment
+  section (response/image data isn't expected to survive restarts) - no fix needed, confirms the
+  documented limitation is real and behaves as expected rather than surprising.
+  Stage 3 (release readiness) for the deployment sub-effort: done. Remaining known limitation,
+  already documented and accepted, not a bug: don't leave a batch processed-but-not-yet-reviewed
+  across an app restart/sleep cycle.
