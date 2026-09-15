@@ -1,5 +1,5 @@
 # Questionnaire Digitizer — Build Plan
-Last updated: 2026-09-15 | Current stage: 2 | Current component: 3 (checkbox pipeline port)
+Last updated: 2026-09-15 | Current stage: 2 | Current component: 4 (review UI)
 
 ## 1. Product summary
 A local desktop/web tool that turns scanned paper research questionnaires (bilingual,
@@ -108,7 +108,7 @@ scanned PDF (per batch)     ──▶  pdftoppm @300dpi ──▶ page PNGs     
 |---|---|---|---|---|---|
 | 1 | Walking skeleton | Proves toolchain: Streamlit app runs, SQLite created, file upload works | — | A blank Streamlit app launches locally, accepts a .docx upload, and writes a row to SQLite | Done |
 | 2 | Schema ingestion | Needed before any scan can be interpreted; low technical risk but blocks everything else | 1 | Uploading the real bilingual .docx produces the correct 71-item schema + 8 demographic fields in SQLite, verified against this session's hand-transcribed list | Done |
-| 3 | Checkbox pipeline port | Highest technical risk — must generalize the session's hand-tuned, single-document pipeline to arbitrary page geometry without a human re-tuning thresholds each time | 1 | Running the pipeline on the same sample PDF used this session reproduces the same 71 values without manual threshold changes, including correctly flagging the DS_6 and AS_2 boundary cases rather than silently guessing | Not started |
+| 3 | Checkbox pipeline port | Highest technical risk — must generalize the session's hand-tuned, single-document pipeline to arbitrary page geometry without a human re-tuning thresholds each time | 1 | Running the pipeline on the same sample PDF used this session reproduces the same 71 values without manual threshold changes, including correctly flagging the DS_6 and AS_2 boundary cases rather than silently guessing | Done |
 | 4 | Review UI | Where the human-in-the-loop promise is delivered, and where demographic fields get entered (manually, per the v1 scope cut) | 2,3 | For the sample PDF, every Likert field the pipeline was unsure about is shown with its source crop; demographic fields have a working entry form next to the page image; both write back to SQLite | Not started |
 | 5 | Excel export | Ties it together into the actual deliverable | 4 | Exporting the sample PDF's reviewed response produces a workbook matching this session's hand-built one in structure and values | Not started |
 | 6 | Batch mode | Needed for "hundreds of respondents", not just one | 2–5 | Importing multiple scanned PDFs under one phase produces one cumulative export with one row per respondent | Not started |
@@ -315,8 +315,21 @@ to prompting the vision LLM for checkbox columns directly as a slower but more r
 for the specific rows calibration can't resolve confidently — not a full replacement, since the
 geometry approach's speed and zero cost are worth keeping for the confident majority of rows.
 
-**Confidence:** Medium — the core algorithm is proven, the calibration generalization is not yet
-tested on a second document.
+**Confidence:** High, revised after building and verifying component 3 (was Medium). The
+calibration approach (Otsu threshold on saturation, computed per-document from that document's own
+pixels) worked as designed. One specific idea in the original plan — restricting ink search to the
+table's exact vertical extent, to keep intro paragraph text out of the calibration sample — turned
+out to be the wrong way to solve that problem: every geometric method tried (longest single-column
+dark run, union of first/last dark pixel, horizontal line-density, multi-gridline quorum voting)
+was fragile against the real perspective skew in these phone-camera scans, each fix passing one
+half-page while breaking another. Replaced with a simpler, more robust fix: search the full half-
+page height, and rely on pixel-count (real ink blobs are reliably larger than printed-text
+antialiasing clusters) to exclude stray text — verified against the real sample, no false
+positives, no lost true marks. Also added a check DR-004 didn't originally call for but that a real
+mismatch surfaced: flagging any tick whose x-centroid lands within 15% of a column's width from a
+column boundary as `confidence: conflict` rather than trusting the geometric bin — this caught one
+real case (PC_3) where a mark's centroid was 0.2px from the boundary line, which pure binning would
+have silently resolved to the wrong column.
 
 ## 10. Changelog
 - 2026-09-15: Initial plan created from Stage 0 constraint interview and this session's hand-
@@ -351,3 +364,35 @@ tested on a second document.
   in the UI. Learned: Python 3.9 (the system interpreter) rejects the `X | None` union type-hint
   syntax without `from __future__ import annotations` — added where needed; worth checking any
   new file against this before assuming modern type-hint syntax is safe to use.
+- 2026-09-15: Component 3 (checkbox pipeline port) done. `checkbox_pipeline.py` renders the PDF at
+  300dpi, finds the 5 answer-column gridlines per half-page (longest-contiguous-dark-run
+  projection, position-agnostic), isolates ink via HSV saturation with a per-document Otsu
+  threshold (pen-color-agnostic, not hardcoded to blue), clusters and column-bins each mark, and
+  reconciles the total detected count against the schema's known item count before trusting any
+  alignment. End-to-end result on the real sample PDF: 71/71 counts reconciled, 70/71 values match
+  this session's hand-verified Excel exactly; the 1 difference (PC_3) is a mark whose centroid sits
+  0.2px from a column boundary — caught and flagged `confidence: conflict` rather than silently
+  trusting the bin, by a new near-column-boundary check this component added (not in the original
+  DR-004 plan, added because this exact case surfaced during verification). DS_6 and AS_2 (the two
+  page-break edge cases from this session's hand analysis) both resolved correctly: AS_2 explicitly
+  flagged `confidence: low` (its mark is split across a page boundary and gets collapsed); DS_6
+  needed no special handling because the global sequential-alignment design (see below) doesn't
+  require per-half pagination knowledge, so it isn't a special case for the algorithm the way it
+  was for manual reading. Verified the unreconciled-count fallback path too (synthetic 3-vs-5
+  mismatch correctly returns `aligned=None` instead of guessing).
+  Significant mid-build pivot, logged per the "reality contradicts the plan" process: DR-004
+  originally called for restricting ink detection to the table's exact vertical extent so intro
+  paragraph text couldn't contaminate calibration. Four different geometric approaches to finding
+  that extent were tried and each was fragile against this document type's real camera skew, so
+  this was abandoned in favor of a simpler fix (full-height search, pixel-count filtering) — see
+  DR-004's updated confidence note for the detail. This is a "minor deviation" in the process's
+  terms (different technique, same component goal, no scope/success-criteria change), not a
+  material one, so it's logged here and in DR-004 rather than re-gated.
+  Architecture note worth carrying forward: without vision, the pipeline cannot know how many
+  items are on any given page/half in advance (that requires reading the printed Code column) —
+  so alignment works by flattening all detected marks into one global sequence and zipping it
+  against the schema in document order, using total-count agreement as the sole cross-check,
+  rather than trying to verify per-half counts. This is why a genuine duplicate (e.g. a mark split
+  across a page break) must be resolved by a geometric heuristic (column-match + top-of-half
+  position, calibrated against this session's real boundary cases) rather than a schema-derived
+  expectation.
