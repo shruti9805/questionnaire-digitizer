@@ -548,3 +548,29 @@ have silently resolved to the wrong column.
   a Claude session can complete unattended): creating the GitHub repo, pushing, connecting it on
   Streamlit Community Cloud, marking the app private, and adding the research team's email
   addresses.
+- 2026-09-15: Correction, caught by the user directly hitting this in the real product rather than
+  trusting what they were told: Streamlit Community Cloud's free tier does NOT currently offer
+  native private-app / per-email viewer access. Both the earlier research agent's report and a
+  direct docs re-check said it should (a docs page states private apps with viewer invites are
+  free, with a "one private app at a time" limit) - both were stale. The user's screenshot of the
+  actual "Deploy" flow (share.streamlit.io/new) shows only three options: public app from GitHub,
+  public app from a template, or "private app in Snowflake" behind a "Start trial" button - i.e.
+  private access has moved to a paid/trial product, not the free tier. Docs lagging a real product
+  change, not a misread; worth remembering that a live screenshot from the user beats a docs fetch
+  when they conflict.
+  Fix: added a minimal shared-password login gate in the app itself (`auth.py`, wired into
+  `app.py` before any other content renders) rather than depending on platform-level access
+  control. One password for the whole team, stored in Streamlit secrets (`APP_PASSWORD`) - never
+  in code or git (`.streamlit/secrets.toml` gitignored; `.streamlit/secrets.toml.example` committed
+  as a template showing the key name). User explicitly chose one shared password over per-person
+  username/password after being shown the tradeoff (simpler vs. being able to tell who's using it /
+  revoke one person).
+  Verified end-to-end in a live browser session: gate correctly blocks all app content before
+  sign-in (no Phases/Process tabs visible); wrong password is rejected with an error and stays
+  blocked; correct password admits access and the rest of the app renders normally; a sidebar
+  "Log out" button correctly returns to the sign-in screen.
+  This is weaker than real per-person access control - anyone with the password gets full access,
+  and there's no audit trail of who signed in. Acceptable given the stated audience (a small named
+  team) and that response data itself doesn't persist beyond one working session (see the schema
+  vs. response-data persistence split above) - but worth revisiting if the audience or data
+  sensitivity changes.

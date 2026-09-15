@@ -14,9 +14,13 @@ from parse_docx import parse_phase_docx, SchemaParseError
 from checkbox_pipeline import align_document_to_items, crop_source_region, list_rendered_pages
 from export import export_response_to_bytes, export_batch_to_bytes
 from schema_loader import load_schemas_from_disk
+from auth import require_login, logout_button
 from PIL import Image
 
 st.set_page_config(page_title="Questionnaire Digitizer", page_icon="\U0001F4CB")
+
+require_login()
+logout_button()
 
 init_db()
 load_schemas_from_disk()
