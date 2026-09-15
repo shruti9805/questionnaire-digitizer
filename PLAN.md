@@ -615,3 +615,16 @@ have silently resolved to the wrong column.
   processed response) before shipping - not yet root-caused, since the actual intermittent
   failure hasn't recurred with this diagnostic in place yet. Next occurrence should surface an
   actionable reason instead of an unexplained blank.
+- 2026-09-15: Resolved the "intermittent blank crop" report. The prior diagnostic fix targeted
+  the wrong failure mode - the user clarified the blank element showed a fullscreen-expand icon
+  on hover, which only Streamlit's own successfully-rendered `st.image` produces; there was no
+  `None`/error case to catch. Confirmed by generating and viewing the actual crop locally
+  (correct content, real checkmark visible) and having the user click the fullscreen icon on the
+  live app (also showed correct content). So: the underlying data/pipeline was never wrong - only
+  the *inline* (non-fullscreen) preview rendered as a near-invisible sliver. Root cause not fully
+  isolated (no access to the live page's computed CSS), but `width="stretch"` resolves size
+  relative to the parent container, which is the more failure-prone path inside a bordered
+  container across Streamlit layouts; switched to a fixed pixel width (`width=900`) instead,
+  since both ultimately cap at the container's actual width per Streamlit's own docs, but a fixed
+  int is a plain value rather than a relative computation. Verified locally: real content visible
+  in the inline preview at a readable size, not just on fullscreen expand.

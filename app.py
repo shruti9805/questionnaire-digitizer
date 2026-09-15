@@ -238,7 +238,14 @@ with tab_process:
                         st.caption(f"{ri['confidence']}: {ri['note']}")
                         crop, crop_error = crop_source_region(response_row["pages_dir"], ri["source"], ri["y"])
                         if crop is not None:
-                            st.image(crop, width="stretch")
+                            # Fixed pixel width instead of "stretch": on the deployed app the
+                            # crop was reported rendering as a near-invisible sliver in the
+                            # inline (non-fullscreen) view despite being correct data (confirmed
+                            # via the fullscreen expand) - "stretch" computes size relative to
+                            # the parent container, which is the more failure-prone path inside
+                            # a bordered container; an explicit width is a plain, predictable
+                            # pixel value regardless of container layout quirks.
+                            st.image(crop, width=900)
                         else:
                             st.warning(f"Source image unavailable: {crop_error}")
                         col1, col2 = st.columns([1, 3])
