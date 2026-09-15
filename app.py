@@ -12,6 +12,7 @@ from db import (
 )
 from parse_docx import parse_phase_docx, SchemaParseError
 from checkbox_pipeline import align_document_to_items, crop_source_region, list_rendered_pages
+from export import export_response_to_bytes
 from PIL import Image
 
 st.set_page_config(page_title="Questionnaire Digitizer", page_icon="\U0001F4CB")
@@ -234,4 +235,18 @@ with tab_process:
                     ],
                     hide_index=True,
                     width="stretch",
+                )
+
+                n_unresolved = sum(1 for ri in response_items if ri["confidence"] != "ok")
+                if n_unresolved:
+                    st.warning(f"{n_unresolved} item(s) above are still flagged — export will include them as-is.")
+                phase_row = get_phase(phase_id)
+                excel_bytes = export_response_to_bytes(
+                    phase_id, phase_row["name"], batch_row["source_pdf_filename"], response_id
+                )
+                st.download_button(
+                    "Download Excel export",
+                    data=excel_bytes,
+                    file_name=f"{phase_row['name'].replace(' ', '_')}_response{response_id}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )

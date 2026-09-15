@@ -1,5 +1,5 @@
 # Questionnaire Digitizer — Build Plan
-Last updated: 2026-09-15 | Current stage: 2 | Current component: 5 (Excel export)
+Last updated: 2026-09-15 | Current stage: 2 | Current component: 6 (batch mode)
 
 ## 1. Product summary
 A local desktop/web tool that turns scanned paper research questionnaires (bilingual,
@@ -110,7 +110,7 @@ scanned PDF (per batch)     ──▶  pdftoppm @300dpi ──▶ page PNGs     
 | 2 | Schema ingestion | Needed before any scan can be interpreted; low technical risk but blocks everything else | 1 | Uploading the real bilingual .docx produces the correct 71-item schema + 8 demographic fields in SQLite, verified against this session's hand-transcribed list | Done |
 | 3 | Checkbox pipeline port | Highest technical risk — must generalize the session's hand-tuned, single-document pipeline to arbitrary page geometry without a human re-tuning thresholds each time | 1 | Running the pipeline on the same sample PDF used this session reproduces the same 71 values without manual threshold changes, including correctly flagging the DS_6 and AS_2 boundary cases rather than silently guessing | Done |
 | 4 | Review UI | Where the human-in-the-loop promise is delivered, and where demographic fields get entered (manually, per the v1 scope cut) | 2,3 | For the sample PDF, every Likert field the pipeline was unsure about is shown with its source crop; demographic fields have a working entry form next to the page image; both write back to SQLite | Done |
-| 5 | Excel export | Ties it together into the actual deliverable | 4 | Exporting the sample PDF's reviewed response produces a workbook matching this session's hand-built one in structure and values | Not started |
+| 5 | Excel export | Ties it together into the actual deliverable | 4 | Exporting the sample PDF's reviewed response produces a workbook matching this session's hand-built one in structure and values | Done |
 | 6 | Batch mode | Needed for "hundreds of respondents", not just one | 2–5 | Importing multiple scanned PDFs under one phase produces one cumulative export with one row per respondent | Not started |
 
 Order reasoning: 1 and 2 are cheap and de-risk the schema side entirely. 3 is the one genuinely
@@ -419,3 +419,19 @@ have silently resolved to the wrong column.
   interaction (open dropdown, click the option), which correctly saved the intended value. No
   application code was at fault; noting this here in case a future session hits the same
   appearance-of-a-bug during testing.
+- 2026-09-15: Component 5 (Excel export) done. `export.py` builds the same four-sheet workbook
+  structure hand-built earlier this session (Demographics / Likert_Responses / Wide_Format /
+  Extraction_Notes) but driven from the DB schema (phase items/demo_fields) and a response's
+  saved values, rather than a hardcoded item list — so it works for any phase, not just this
+  sample document. Wired a "Download Excel export" button into the review screen.
+  Verified: re-ran the exporter against the real reviewed response and diffed all 71
+  Likert_Responses values against this session's original hand-verified list (from the very first
+  extraction, done by direct visual reading + the pixel pipeline, before any of this app existed)
+  — zero mismatches. Also caught and fixed two pieces of leftover test data from component 4's
+  interactive testing (ER_5 had been deliberately set to a wrong value to prove the correction
+  UI worked, and never set back; PC_3 needed the same cleanup) — corrected via direct DB calls so
+  the final exported numbers are accurate, not just mechanically produced.
+  Demographics sheet confirmed correct after re-verifying the two fields (School Attendance,
+  Gender) that a first attempt had silently left blank due to the same custom-selectbox testing
+  limitation noted in component 4 — redone with real clicks and confirmed via SQLite before
+  trusting the export.
