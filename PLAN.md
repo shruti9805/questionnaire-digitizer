@@ -515,3 +515,36 @@ have silently resolved to the wrong column.
   this fix) still holds the old, wrong detections in SQLite - reprocessing that PDF through
   "Process PDFs" again is needed to pick up this fix; existing exports already downloaded were
   generated from the old detection and are not automatically corrected.
+- 2026-09-15: Deployment planning and implementation, for the user's request to make this usable
+  by a few named research assistants, not just locally. Researched current (dated 2026-09-15,
+  sources in the research agent's report) free-tier hosting options rather than relying on
+  training-data knowledge, since these terms change often: Railway and Fly.io no longer have real
+  always-on free tiers (trial credits only); Render's free tier explicitly documents that local
+  disk (including SQLite files) is wiped on every restart/redeploy/spin-down, same problem as
+  Streamlit Community Cloud without a fix. Initially proposed Streamlit Community Cloud (free,
+  native private-app access control, installs `poppler-utils` via `packages.txt`) + Turso (a free
+  SQLite-compatible hosted DB) for persistence.
+  Revised down through direct back-and-forth with the user: (1) clarified that response/batch data
+  does NOT need to survive restarts - the user's actual workflow is process -> review -> export
+  within one sitting, with the downloaded Excel as the durable record; only phase schemas (parsed
+  .docx templates) need to survive, since those get reused across many batches over time; (2) given
+  how little schema data there actually is, replaced the Turso persistence layer entirely with
+  committing parsed schemas as JSON to the repo and reloading them into local SQLite on every app
+  startup (`schema_loader.py` + `dump_schema.py`) - no external database at all; (3) considered and
+  explicitly rejected letting the running app commit new schemas back to GitHub itself via a
+  stored write-token, after laying out the real cost (a repo-write credential living in the hosted
+  app, a new class of network/auth/git-conflict failure modes, a slower non-instant "add a phase"
+  flow) for something the user said happens rarely - user chose the simpler "send the .docx to a
+  Claude session, which runs dump_schema.py and pushes" workflow instead.
+  Implemented and verified: `schema_loader.py` (loads schemas/*.json into local SQLite on startup,
+  idempotent - verified a second call loads nothing new and doesn't duplicate the phase),
+  `dump_schema.py` (CLI: docx path + phase name -> schemas/<slug>.json, reuses parse_phase_docx
+  unchanged), `packages.txt` (poppler-utils for pdftoppm on Streamlit Cloud), pinned numpy/pillow
+  versions in requirements.txt for reproducibility on a fresh cloud environment. Verified end to
+  end: wiped the local dev DB (simulating a Streamlit Cloud restart), confirmed "Phase 1 - Pilot"
+  (the real sample phase, 71 items + 8 demo fields) reappears automatically with zero manual
+  upload, live in the running app - not just via a direct Python check.
+  Not yet done (needs the user's own GitHub/Streamlit Cloud login, so it's a handoff, not something
+  a Claude session can complete unattended): creating the GitHub repo, pushing, connecting it on
+  Streamlit Community Cloud, marking the app private, and adding the research team's email
+  addresses.

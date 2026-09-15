@@ -60,3 +60,33 @@ appetite for the (small, ~$5-15/phase) API cost. See PLAN.md DR-002.
   reading via the Claude API if that tradeoff becomes worth it.
 - Real sample scans are phone-camera "booklet spread" PDFs (Adobe Scan), two printed pages per
   image, with real-world skew/lighting variation — not clean flatbed scans.
+
+## Deployment (added 2026-09-15, see PLAN.md changelog for the full decision trail)
+The app is deployed for a small named team (the researcher + research assistants), not the public,
+on Streamlit Community Cloud (free tier). This changed the storage model, decided through explicit
+tradeoffs with the user rather than assumed:
+
+- **Phase schemas** (parsed from a phase's .docx: `phases`/`items`/`demo_fields`) are the one thing
+  that must survive a restart. Streamlit Cloud's local disk is wiped on every restart/redeploy, so
+  instead of standing up an external database for what's a small, rarely-changing amount of data,
+  each phase's parsed schema is committed to the repo as JSON (`schemas/*.json`, produced by
+  `dump_schema.py`) and re-loaded into local SQLite on every app startup (`schema_loader.py`). The
+  git repo is the actual source of truth; local SQLite is just a cache rebuilt each run.
+- **Response/batch data** (`batches`/`responses`/`response_items`/`response_demo_values`) is
+  explicitly NOT persisted beyond local disk. The user's own stated workflow is process → review →
+  export within one sitting, with the downloaded Excel file as the durable record — so losing
+  in-progress (not yet exported) work on an unexpected restart is an accepted tradeoff, not a bug.
+  Concretely: don't leave a batch half-reviewed for long stretches; finish and download before
+  walking away.
+- **Adding a new phase once deployed**: send the researcher's .docx to a Claude session (this
+  workflow, not a feature in the app itself), which runs `dump_schema.py`, commits the resulting
+  JSON, and pushes — Streamlit Cloud auto-redeploys with the new phase available. A GitHub-API
+  self-service alternative (the running app committing its own schema updates) was considered and
+  explicitly rejected: it would need a repo-write credential living in the hosted app plus a new
+  class of failure modes, for something the user described as infrequent enough not to justify it.
+- **Access control**: Streamlit Community Cloud's native private-app setting (specific email
+  addresses as allowed viewers, signed in via Google OAuth or a magic link) - no auth code in the
+  app itself.
+- Free-tier alternatives were checked and ruled out with dated evidence (see PLAN.md): Railway and
+  Fly.io no longer have real always-on free tiers as of 2026; Render's free tier explicitly wipes
+  local disk on every restart, same problem as Streamlit Cloud without a workaround.
