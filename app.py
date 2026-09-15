@@ -6,13 +6,13 @@ import streamlit as st
 
 from db import (
     init_db, create_phase, list_phases, save_schema, get_items, get_demo_fields, get_phase,
-    create_batch, list_batches, create_response, list_responses,
+    create_batch, list_batches, create_response, list_responses, get_response,
     save_response_items, get_response_items, update_response_item,
     save_response_demo_value, get_response_demo_values,
 )
 from parse_docx import parse_phase_docx, SchemaParseError
 from checkbox_pipeline import align_document_to_items, crop_source_region, list_rendered_pages
-from export import export_response_to_bytes
+from export import export_response_to_bytes, export_batch_to_bytes
 from PIL import Image
 
 st.set_page_config(page_title="Questionnaire Digitizer", page_icon="\U0001F4CB")
@@ -110,55 +110,75 @@ with tab_process:
         phase_items = get_items(phase_id)
         phase_demo_fields = get_demo_fields(phase_id)
 
-        st.markdown("### Upload a scanned questionnaire PDF")
-        pdf_upload = st.file_uploader("Scanned PDF (one or more filled questionnaires)", type=["pdf"], key="pdf_upload")
-        if pdf_upload is not None and st.button("Process PDF"):
+        st.markdown("### Upload scanned questionnaire PDFs")
+        st.caption("One PDF per respondent. Upload as many at once as you have for this batch of scans.")
+        pdf_uploads = st.file_uploader(
+            "Scanned PDFs", type=["pdf"], accept_multiple_files=True, key="pdf_upload"
+        )
+        if pdf_uploads and st.button(f"Process {len(pdf_uploads)} PDF(s)"):
             batch_dir = DATA_DIR / f"phase{phase_id}_{int(time.time())}"
             batch_dir.mkdir(parents=True, exist_ok=True)
-            pdf_path = batch_dir / pdf_upload.name
-            pdf_path.write_bytes(pdf_upload.getvalue())
+            batch_id = create_batch(phase_id, label=f"{len(pdf_uploads)} file(s) uploaded {time.strftime('%Y-%m-%d %H:%M')}")
 
-            with st.spinner("Detecting checkbox grid..."):
-                item_results, raw = align_document_to_items(str(pdf_path), phase_items, str(batch_dir))
+            results_summary = []
+            for pdf_upload in pdf_uploads:
+                response_dir = batch_dir / Path(pdf_upload.name).stem
+                response_dir.mkdir(parents=True, exist_ok=True)
+                pdf_path = response_dir / pdf_upload.name
+                pdf_path.write_bytes(pdf_upload.getvalue())
 
-            batch_id = create_batch(phase_id, pdf_upload.name, str(batch_dir))
+                with st.spinner(f"Detecting checkbox grid in {pdf_upload.name}..."):
+                    item_results, raw = align_document_to_items(str(pdf_path), phase_items, str(response_dir))
 
-            if item_results is None:
-                st.error(
-                    f"Couldn't automatically align marks to the schema: detected "
-                    f"{raw.total_ticks_detected} marks but expected {raw.total_expected} "
-                    f"({len(phase_items)} items). This usually means the scan has an unusual "
-                    f"page break or a page is missing. Per-half detail:"
-                )
-                st.table(
-                    [{"source": h.source, "n_ticks": len(h.ticks)} for h in raw.per_half]
-                )
-            else:
-                response_id = create_response(batch_id)
-                save_response_items(response_id, item_results)
-                n_flagged = sum(1 for r in item_results if r.confidence != "ok")
-                st.success(
-                    f"Saved response #{response_id}: {len(item_results)} items detected, "
-                    f"{n_flagged} flagged for review."
-                )
+                if item_results is None:
+                    results_summary.append({
+                        "file": pdf_upload.name, "status": "FAILED to align",
+                        "detail": f"detected {raw.total_ticks_detected}, expected {raw.total_expected}",
+                    })
+                else:
+                    response_id = create_response(
+                        batch_id, source_pdf_filename=pdf_upload.name, pages_dir=str(response_dir),
+                        respondent_label=Path(pdf_upload.name).stem,
+                    )
+                    save_response_items(response_id, item_results)
+                    n_flagged = sum(1 for r in item_results if r.confidence != "ok")
+                    results_summary.append({
+                        "file": pdf_upload.name, "status": f"response #{response_id}",
+                        "detail": f"{len(item_results)} items, {n_flagged} flagged",
+                    })
+
+            st.success(f"Processed {len(pdf_uploads)} file(s) into batch #{batch_id}.")
+            st.table(results_summary)
 
         st.markdown("### Review a response")
         batches = list_batches(phase_id)
         if not batches:
             st.write("No batches processed yet for this phase.")
         else:
-            batch_options = {f"#{b['id']} — {b['source_pdf_filename']} ({b['uploaded_at']})": b["id"] for b in batches}
+            batch_options = {f"#{b['id']} — {b['label']} ({b['uploaded_at']})": b["id"] for b in batches}
             batch_label = st.selectbox("Batch", list(batch_options.keys()))
             batch_id = batch_options[batch_label]
-            batch_row = next(b for b in batches if b["id"] == batch_id)
 
             responses = list_responses(batch_id)
             if not responses:
                 st.write("No responses in this batch.")
             else:
-                response_options = {f"Response #{r['id']}": r["id"] for r in responses}
+                phase_row = get_phase(phase_id)
+                batch_excel_bytes = export_batch_to_bytes(phase_id, phase_row["name"], batch_id)
+                st.download_button(
+                    f"Download cumulative Excel export for this batch ({len(responses)} respondent(s))",
+                    data=batch_excel_bytes,
+                    file_name=f"{phase_row['name'].replace(' ', '_')}_batch{batch_id}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+
+                response_options = {
+                    f"Response #{r['id']} — {r['respondent_label'] or r['source_pdf_filename']}": r["id"]
+                    for r in responses
+                }
                 response_label = st.selectbox("Response", list(response_options.keys()))
                 response_id = response_options[response_label]
+                response_row = get_response(response_id)
 
                 st.markdown("#### Demographic fields")
                 st.caption(
@@ -167,17 +187,17 @@ with tab_process:
                 )
                 img_col, form_col = st.columns([1, 1])
                 with img_col:
-                    page_files = list_rendered_pages(batch_row["pages_dir"])
+                    page_files = list_rendered_pages(response_row["pages_dir"])
                     if page_files:
                         page_choice = st.selectbox(
                             "Reference page", page_files, key=f"demo_page_{response_id}"
                         )
                         st.image(
-                            str(Path(batch_row["pages_dir"]) / page_choice),
+                            str(Path(response_row["pages_dir"]) / page_choice),
                             width="stretch",
                         )
                     else:
-                        st.write("No rendered pages found for this batch.")
+                        st.write("No rendered pages found for this response.")
 
                 with form_col:
                     existing_demo = get_response_demo_values(response_id)
@@ -210,7 +230,7 @@ with tab_process:
                     with st.container(border=True):
                         st.markdown(f"**{ri['code']}** — {ri['statement_en']}")
                         st.caption(f"{ri['confidence']}: {ri['note']}")
-                        crop = crop_source_region(batch_row["pages_dir"], ri["source"], ri["y"])
+                        crop = crop_source_region(response_row["pages_dir"], ri["source"], ri["y"])
                         if crop is not None:
                             st.image(crop, width="stretch")
                         col1, col2 = st.columns([1, 3])
@@ -240,12 +260,11 @@ with tab_process:
                 n_unresolved = sum(1 for ri in response_items if ri["confidence"] != "ok")
                 if n_unresolved:
                     st.warning(f"{n_unresolved} item(s) above are still flagged — export will include them as-is.")
-                phase_row = get_phase(phase_id)
                 excel_bytes = export_response_to_bytes(
-                    phase_id, phase_row["name"], batch_row["source_pdf_filename"], response_id
+                    phase_id, phase_row["name"], response_row["source_pdf_filename"], response_id
                 )
                 st.download_button(
-                    "Download Excel export",
+                    "Download Excel export for this response only",
                     data=excel_bytes,
                     file_name=f"{phase_row['name'].replace(' ', '_')}_response{response_id}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

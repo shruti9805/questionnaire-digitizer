@@ -44,15 +44,16 @@ CREATE TABLE IF NOT EXISTS demo_fields (
 CREATE TABLE IF NOT EXISTS batches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     phase_id INTEGER NOT NULL REFERENCES phases(id),
-    source_pdf_filename TEXT NOT NULL,
-    pages_dir TEXT NOT NULL,
+    label TEXT,
     uploaded_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS responses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     batch_id INTEGER NOT NULL REFERENCES batches(id),
-    respondent_label TEXT
+    respondent_label TEXT,
+    source_pdf_filename TEXT NOT NULL,
+    pages_dir TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS response_demo_values (
@@ -172,12 +173,12 @@ def get_phase(phase_id: int) -> sqlite3.Row | None:
         conn.close()
 
 
-def create_batch(phase_id: int, source_pdf_filename: str, pages_dir: str) -> int:
+def create_batch(phase_id: int, label: str | None = None) -> int:
     conn = get_connection()
     try:
         cur = conn.execute(
-            "INSERT INTO batches (phase_id, source_pdf_filename, pages_dir, uploaded_at) VALUES (?, ?, ?, ?)",
-            (phase_id, source_pdf_filename, pages_dir, datetime.now(timezone.utc).isoformat()),
+            "INSERT INTO batches (phase_id, label, uploaded_at) VALUES (?, ?, ?)",
+            (phase_id, label, datetime.now(timezone.utc).isoformat()),
         )
         conn.commit()
         return cur.lastrowid
@@ -189,20 +190,21 @@ def list_batches(phase_id: int) -> list[sqlite3.Row]:
     conn = get_connection()
     try:
         return conn.execute(
-            "SELECT id, source_pdf_filename, pages_dir, uploaded_at FROM batches "
-            "WHERE phase_id = ? ORDER BY id DESC",
+            "SELECT id, label, uploaded_at FROM batches WHERE phase_id = ? ORDER BY id DESC",
             (phase_id,),
         ).fetchall()
     finally:
         conn.close()
 
 
-def create_response(batch_id: int, respondent_label: str | None = None) -> int:
+def create_response(batch_id: int, source_pdf_filename: str, pages_dir: str,
+                     respondent_label: str | None = None) -> int:
     conn = get_connection()
     try:
         cur = conn.execute(
-            "INSERT INTO responses (batch_id, respondent_label) VALUES (?, ?)",
-            (batch_id, respondent_label),
+            "INSERT INTO responses (batch_id, respondent_label, source_pdf_filename, pages_dir) "
+            "VALUES (?, ?, ?, ?)",
+            (batch_id, respondent_label, source_pdf_filename, pages_dir),
         )
         conn.commit()
         return cur.lastrowid
@@ -214,9 +216,18 @@ def list_responses(batch_id: int) -> list[sqlite3.Row]:
     conn = get_connection()
     try:
         return conn.execute(
-            "SELECT id, respondent_label FROM responses WHERE batch_id = ? ORDER BY id",
+            "SELECT id, respondent_label, source_pdf_filename, pages_dir FROM responses "
+            "WHERE batch_id = ? ORDER BY id",
             (batch_id,),
         ).fetchall()
+    finally:
+        conn.close()
+
+
+def get_response(response_id: int) -> sqlite3.Row | None:
+    conn = get_connection()
+    try:
+        return conn.execute("SELECT * FROM responses WHERE id = ?", (response_id,)).fetchone()
     finally:
         conn.close()
 

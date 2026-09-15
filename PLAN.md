@@ -1,5 +1,5 @@
 # Questionnaire Digitizer — Build Plan
-Last updated: 2026-09-15 | Current stage: 2 | Current component: 6 (batch mode)
+Last updated: 2026-09-15 | Current stage: 3 | Current component: — (all v1 components done, entering release readiness)
 
 ## 1. Product summary
 A local desktop/web tool that turns scanned paper research questionnaires (bilingual,
@@ -111,7 +111,7 @@ scanned PDF (per batch)     ──▶  pdftoppm @300dpi ──▶ page PNGs     
 | 3 | Checkbox pipeline port | Highest technical risk — must generalize the session's hand-tuned, single-document pipeline to arbitrary page geometry without a human re-tuning thresholds each time | 1 | Running the pipeline on the same sample PDF used this session reproduces the same 71 values without manual threshold changes, including correctly flagging the DS_6 and AS_2 boundary cases rather than silently guessing | Done |
 | 4 | Review UI | Where the human-in-the-loop promise is delivered, and where demographic fields get entered (manually, per the v1 scope cut) | 2,3 | For the sample PDF, every Likert field the pipeline was unsure about is shown with its source crop; demographic fields have a working entry form next to the page image; both write back to SQLite | Done |
 | 5 | Excel export | Ties it together into the actual deliverable | 4 | Exporting the sample PDF's reviewed response produces a workbook matching this session's hand-built one in structure and values | Done |
-| 6 | Batch mode | Needed for "hundreds of respondents", not just one | 2–5 | Importing multiple scanned PDFs under one phase produces one cumulative export with one row per respondent | Not started |
+| 6 | Batch mode | Needed for "hundreds of respondents", not just one | 2–5 | Importing multiple scanned PDFs under one phase produces one cumulative export with one row per respondent | Done |
 
 Order reasoning: 1 and 2 are cheap and de-risk the schema side entirely. 3 is the one genuinely
 uncertain technical bet left after cutting the vision-API step (component 4 in the prior version of
@@ -435,3 +435,24 @@ have silently resolved to the wrong column.
   Gender) that a first attempt had silently left blank due to the same custom-selectbox testing
   limitation noted in component 4 — redone with real clicks and confirmed via SQLite before
   trusting the export.
+- 2026-09-15: Component 6 (batch mode) done. Required a schema change: `pages_dir` and
+  `source_pdf_filename` moved from `batches` to `responses` (each respondent's PDF renders to its
+  own directory; a batch is now just a phase + upload timestamp + label grouping N responses).
+  `app.py`'s uploader now takes multiple PDFs (`accept_multiple_files=True`) and processes each
+  into its own subdirectory and response row under one new batch. Added `export_batch_to_bytes` /
+  `build_batch_workbook` to export.py: same four-sheet shape, generalized to one row per respondent
+  in Demographics and Wide_Format, and a Respondent column in the long-format Likert_Responses
+  sheet.
+  Verified: no independent second scanned document exists yet, so multi-file mechanics were
+  tested by uploading the real sample PDF under two different filenames (respondent_A.pdf,
+  respondent_B.pdf) — this genuinely exercises the code path (separate work directories, two
+  independent pipeline runs, two response rows) even though the underlying answers are identical.
+  Confirmed: both reconciled 71/71 independently; the cumulative export produced exactly 2 rows in
+  Demographics and Wide_Format and 142 (=71×2) rows in Likert_Responses; the live review UI
+  correctly switched between responses, each loading its own page images (not falling back to the
+  other response's files, which would have been the most likely bug if the per-response directory
+  change were wrong).
+  This was the last v1 component. All six are Done; PRODUCT.md's stated v1 scope (schema
+  ingestion, automated Likert detection, manual demographic entry, human review, per-response and
+  cumulative Excel export) is now fully implemented and verified against the real sample data from
+  the start of this session. Moving to Stage 3 (release readiness) next.
