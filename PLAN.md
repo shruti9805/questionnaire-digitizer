@@ -474,3 +474,44 @@ have silently resolved to the wrong column.
   offsets, and confirmed ER_5/PC_3's values are unchanged from the multi-tab version (data content
   wasn't touched, only layout). Also confirmed no errors in the live running app against the user's
   own real phase/batch data (not just this session's synthetic sample).
+- 2026-09-15: Fixed a real column-misdetection bug in `checkbox_pipeline.py`'s
+  `find_answer_grid_columns`, found while explaining to the user why PC_3 (this session's
+  known near-boundary case, see the earlier component-3 entries) was actually parsed wrong rather
+  than just "close." Root cause, verified against the real pixel data: on page-6's right half, the
+  true leftmost gridline (the Statement/column-1 divider) has a longest contiguous dark run of
+  247px against that page's 259px detection threshold - a real camera-skew fragmentation, not
+  noise - so it was silently dropped, leaving only 5 of the 6 true gridlines. The code then took
+  the leftmost SURVIVING line (actually the column-1/2 divider) as if it were the left edge of
+  column 1, and equally divided the remaining width into 5 - shifting every column boundary on
+  that half-page one column's width to the right of true. PC_3's mark, genuinely in column 3,
+  fell on the wrong side of this shifted estimate.
+  Two changes: (1) lowered `min_run_frac` from 0.14 to 0.08 - verified safe by checking that
+  paragraph text (the original reason for using contiguous-run length at all, see component 3)
+  never exceeds ~20px of contiguous run even where its total dark-pixel count is high, so there's
+  roughly a 10x safety margin between "text" and "the weakest real gridline seen this session"
+  (226px) at either threshold; (2) when exactly 6 gridlines are found, use their real measured
+  x-positions as column boundaries directly, instead of discarding the 4 inner ones (which were
+  already being detected!) and re-deriving them by assuming exactly equal column widths from just
+  the outer two. This second change was silently discarding real, already-measured data the whole
+  time - not a new capability, a bug in using what was already there.
+  The threshold lowering introduced a new false positive (the demographics page, which has no
+  Likert table, started registering a spurious 6-line/80px-wide "grid" from unrelated page
+  structure); fixed by requiring a detected grid to be at least 150px wide, verified against the
+  actual widths of every real grid in the sample (217-234px) vs. the one false positive (80px) -
+  large margin either side.
+  Verified: re-ran the full pipeline against the real sample PDF - 71/71 reconciled, and this time
+  **all 71 values exactly match** the hand-verified extraction from the start of this session
+  (previously 70/71, PC_3 was the one wrong value). PC_3 now correctly shows 3 with confidence
+  "low" (page-break-adjacency note only) rather than 2 with confidence "conflict". Tested the
+  user's own proposed fix (bin by the checkmark's lowest point instead of its centroid) against
+  the real ink pixels first - it does not fix this case (the lowest point was measured at x=1053,
+  even further from the true boundary than the centroid's 1058.6) - so it was not implemented;
+  the actual fix is unrelated to which part of the mark is sampled.
+  This is a genuine correctness fix to the checkbox pipeline, unlike the two prior changes (which
+  were git-tagged checkpoints for output-format tweaks the user asked to be able to revert). Not
+  separately tagged, since it fixes a real bug rather than trading one deliberate behavior for
+  another - reverting to the checkpoint before this point would reintroduce a known wrong answer.
+  Note for the user: their own already-processed batch (phase #2, real data, processed before
+  this fix) still holds the old, wrong detections in SQLite - reprocessing that PDF through
+  "Process PDFs" again is needed to pick up this fix; existing exports already downloaded were
+  generated from the old detection and are not automatically corrected.

@@ -79,13 +79,36 @@ def _longest_run(mask_1d: np.ndarray) -> tuple[int, int, int]:
     return best_len, best_start, best_start + best_len
 
 
-def find_answer_grid_columns(rgb: np.ndarray, min_run_frac: float = 0.14, right_frac: float = 0.5):
-    """Find the 5 equal-width answer-column boundaries AND the table's
-    vertical extent on a half-page image, using only the longest-contiguous-
-    dark-run gridlines (real printed table borders span the whole table
-    height in one unbroken run; paragraph text above/below does not).
-    Returns (left, right, col_bounds[6], y_top, y_bottom) or None if no grid
-    is found (e.g. a half with no Likert table on it)."""
+def find_answer_grid_columns(rgb: np.ndarray, min_run_frac: float = 0.08, right_frac: float = 0.5):
+    """Find the 5 answer-column boundaries on a half-page image, using
+    longest-contiguous-dark-run gridline detection (real printed table
+    borders span the whole table height in one unbroken run; paragraph
+    text above/below never does - even where text accumulates a high
+    total dark-pixel count, its longest single run is only ~15-20px,
+    two orders of magnitude below any real gridline found this session).
+    Returns (left, right, col_bounds[6]) or None if no grid is found (e.g.
+    a half with no Likert table on it).
+
+    `min_run_frac` was 0.14 originally; lowered to 0.08 after finding a
+    real case (PC_3, this session's user-reported issue) where camera
+    perspective skew fragmented a genuine gridline's contiguous run just
+    below the 0.14 threshold (247px against a 259px cutoff on that page),
+    silently dropping it and shifting every boundary-adjacent item on that
+    half-page by one column. 0.08 recovers that case with a wide safety
+    margin below (text tops out at ~20px; the weakest genuine gridline
+    found across this session's whole sample was 226px) - not a magic
+    number, just comfortably outside both observed failure directions.
+
+    When exactly 6 gridlines are found, their real measured x-positions
+    are used directly as column boundaries, instead of just taking the
+    outer two and assuming the 5 columns are exactly equal-width (the
+    other actual cause of the PC_3 case - the discarded inner lines were
+    already being detected, just thrown away). Falls back to equal-width
+    division of the outer two lines when the count isn't exactly 6 (e.g.
+    a 7th spurious line, or a genuinely undetectable gridline even at this
+    threshold) - a defined, honest degradation rather than no detection at
+    all, since the alignment step's total-count cross-check remains the
+    final safety net either way."""
     h, w, _ = rgb.shape
     gray = np.array(Image.fromarray(rgb).convert("L"))
     dark = gray < 235
@@ -111,23 +134,23 @@ def find_answer_grid_columns(rgb: np.ndarray, min_run_frac: float = 0.14, right_
             cur_xs, cur_starts, cur_ends = [x], [runs[x][1]], [runs[x][2]]
     lines.append((int(np.mean(cur_xs)), int(np.mean(cur_starts)), int(np.mean(cur_ends))))
 
-    xs_only = [l[0] for l in lines]
-    left, right = min(xs_only), max(xs_only)
-    if right - left < 20:  # degenerate: no real grid width found
+    xs_only = sorted(l[0] for l in lines)
+    left, right = xs_only[0], xs_only[-1]
+    # A real 5-column Likert answer grid is reliably 217-234px wide across
+    # this session's whole sample; too narrow means these are unrelated
+    # lines (verified case: a demographics-page structure produced 6 evenly
+    # spaced lines only 80px wide total, after the min_run_frac lowering
+    # above made detection more permissive) rather than a real grid.
+    if right - left < 150:
         return None
 
-    # Deliberately NOT trying to detect the table's exact vertical extent
-    # here. These are phone-camera photos of a book spread (not flatbed
-    # scans), and every geometric approach tried this session - longest
-    # single-column dark run, union of first/last dark pixel, horizontal
-    # line-density, multi-gridline quorum voting - was fragile against the
-    # resulting perspective skew, each fixing one page's false positives
-    # while breaking another page's true detections. The full half-page
-    # height is searched instead (see detect_ink_mask / cluster_ticks),
-    # and stray printed-text pixels are excluded there by pixel-count
-    # (real ink blobs are reliably larger than any printed-text
-    # antialiasing cluster - verified against this session's real sample).
-    col_bounds = [left + (right - left) * i / 5 for i in range(6)]
+    if len(xs_only) == 6:
+        col_bounds = xs_only  # real measured positions for all 6 boundaries
+    else:
+        # Fallback: assume equal-width columns from just the outer two
+        # lines. Less accurate near boundaries, but the alignment step's
+        # total-count check still catches gross misalignment.
+        col_bounds = [left + (right - left) * i / 5 for i in range(6)]
     return left, right, col_bounds
 
 
