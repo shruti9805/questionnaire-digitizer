@@ -276,17 +276,27 @@ with tab_process:
                             st.warning(f"Source image unavailable: {crop_error}")
                         col1, col2 = st.columns([1, 3])
                         with col1:
+                            # A value of None (no mark detected at all) must not default to
+                            # "1" silently - that looked, in the deployed app, exactly like a
+                            # real detected value sitting right next to the crop-unavailable
+                            # warning, with nothing distinguishing "the pipeline found 1" from
+                            # "nothing was found and this is just the first dropdown option."
+                            NOT_DETECTED = "— not detected, choose a value —"
+                            options = [NOT_DETECTED, 1, 2, 3, 4, 5] if ri["value"] is None else [1, 2, 3, 4, 5]
                             corrected = st.selectbox(
-                                "Value", [1, 2, 3, 4, 5],
-                                index=(ri["value"] - 1) if ri["value"] else 0,
+                                "Value", options,
+                                index=0 if ri["value"] is None else ri["value"] - 1,
                                 key=f"correct_{ri['id']}",
                             )
                         with col2:
                             st.write("")
                             if st.button("Confirm this value", key=f"confirmbtn_{ri['id']}"):
-                                update_response_item(ri["id"], corrected, confidence="ok")
-                                st.success(f"{ri['code']} confirmed as {corrected}.")
-                                st.rerun()
+                                if corrected == NOT_DETECTED:
+                                    st.error("Choose an actual value before confirming - this item had no detected mark.")
+                                else:
+                                    update_response_item(ri["id"], corrected, confidence="ok")
+                                    st.success(f"{ri['code']} confirmed as {corrected}.")
+                                    st.rerun()
 
                 st.markdown("#### Full response")
                 st.dataframe(
