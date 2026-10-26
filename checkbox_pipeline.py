@@ -349,17 +349,20 @@ class AlignedItem:
     value: int | None
     confidence: str  # "ok" | "low" | "conflict"
     note: str | None
-    source: str
+    source: str | None
     y: float | None
 
 
 @dataclass
 class AlignmentResult:
-    aligned: list[AlignedItem] | None  # None if counts couldn't be reconciled
+    # Always has exactly n_expected entries now (previously None when counts
+    # didn't match, which discarded every item - see align_to_schema).
+    aligned: list[AlignedItem]
     total_ticks_detected: int
     total_expected: int
     per_half: list[HalfResult]
     collapsed_boundaries: list[tuple[str, str]]  # (prev_half_source, half_source) pairs collapsed
+    count_mismatch: bool  # True if total_ticks_detected != total_expected
 
 
 def align_to_schema(per_half: list[HalfResult], n_expected: int) -> AlignmentResult:
@@ -371,6 +374,26 @@ def align_to_schema(per_half: list[HalfResult], n_expected: int) -> AlignmentRes
     verified against this session's real sample (5 true continuations, all
     in the top ~10-12%; one same-value-but-unrelated adjacent pair at ~22%,
     correctly excluded by this threshold).
+
+    Previously, when the detected total didn't exactly match the schema's
+    expected count, this returned `aligned=None` and the caller (app.py)
+    discarded every item - nothing got saved, even when e.g. 68 of 71 marks
+    were almost certainly read correctly. A real respondent's scan
+    (BP_15.pdf) with lighter/thinner pen strokes than the pipeline was
+    originally validated against made this the common case rather than the
+    exception, and the user explicitly asked for partial results instead of
+    a hard failure. Now always returns a full n_expected-length list:
+    positions beyond what was detected (undercount) get value=None,
+    confidence="conflict"; positions beyond n_expected (overcount, rarer in
+    testing) are dropped rather than returned, since there's no schema slot
+    for them. `count_mismatch` tells the caller/UI this happened, since a
+    mismatch means positions *could* be shifted from some point onward (the
+    flattened-sequence design has no way to localize exactly where a gap
+    occurred without per-half expected counts, which the schema doesn't
+    carry) - surfaced as one document-level warning rather than
+    individually flagging every item "conflict" even when most are still
+    very likely correctly positioned (most gaps found in testing are near
+    the end of the document, not scattered through the middle).
     """
     flat: list[Tick] = []
     flat_source: list[str] = []
@@ -390,15 +413,13 @@ def align_to_schema(per_half: list[HalfResult], n_expected: int) -> AlignmentRes
         flat_source.extend([half.source] * len(ticks))
 
     total = len(flat)
-    if total != n_expected:
-        return AlignmentResult(
-            aligned=None, total_ticks_detected=total, total_expected=n_expected,
-            per_half=per_half, collapsed_boundaries=collapsed_boundaries,
-        )
+    count_mismatch = total != n_expected
 
     boundary_sources = {s for pair in collapsed_boundaries for s in pair}
-    aligned = []
-    for i, (tick, source) in enumerate(zip(flat, flat_source)):
+    aligned: list[AlignedItem] = []
+    n_present = min(total, n_expected)
+    for i in range(n_present):
+        tick, source = flat[i], flat_source[i]
         is_boundary = source in boundary_sources and (
             (i > 0 and flat_source[i - 1] != source) or (i + 1 < len(flat_source) and flat_source[i + 1] != source)
         )
@@ -418,9 +439,27 @@ def align_to_schema(per_half: list[HalfResult], n_expected: int) -> AlignmentRes
                 y=tick.y,
             )
         )
+    for i in range(n_present, n_expected):
+        # Undercount: no detected tick left for this schema position. Value
+        # left blank rather than guessed; the researcher fills it in from
+        # the source page during review, same as any other low-confidence
+        # item, just with no automated suggestion at all.
+        aligned.append(
+            AlignedItem(
+                schema_index=i,
+                value=None,
+                confidence="conflict",
+                note=(
+                    f"not detected - only {total} of {n_expected} marks were found in this "
+                    "document; this item (and possibly later ones) may need manual entry"
+                ),
+                source=None,
+                y=None,
+            )
+        )
     return AlignmentResult(
         aligned=aligned, total_ticks_detected=total, total_expected=n_expected,
-        per_half=per_half, collapsed_boundaries=collapsed_boundaries,
+        per_half=per_half, collapsed_boundaries=collapsed_boundaries, count_mismatch=count_mismatch,
     )
 
 
@@ -447,13 +486,13 @@ class ItemResult:
     y: float | None  # y-coordinate within that half-page image, for crop generation
 
 
-def align_document_to_items(pdf_path: str, items: list, work_dir: str) -> tuple[list[ItemResult] | None, AlignmentResult]:
+def align_document_to_items(pdf_path: str, items: list, work_dir: str) -> tuple[list[ItemResult], AlignmentResult]:
     """items: sqlite3.Row-like objects with 'id' and 'code', in schema position
-    order (as returned by db.get_items). Returns (per-item results or None if
-    counts couldn't be reconciled, the raw AlignmentResult for diagnostics)."""
+    order (as returned by db.get_items). Returns (per-item results, the raw
+    AlignmentResult for diagnostics - check result.count_mismatch to see if
+    the detected total didn't match len(items); items past the detected
+    count have value=None, confidence="conflict" rather than being guessed)."""
     result = process_document(pdf_path, len(items), work_dir)
-    if result.aligned is None:
-        return None, result
     item_results = [
         ItemResult(item_id=items[a.schema_index]["id"], code=items[a.schema_index]["code"],
                    value=a.value, confidence=a.confidence, note=a.note, source=a.source, y=a.y)

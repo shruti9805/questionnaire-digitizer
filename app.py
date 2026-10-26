@@ -136,22 +136,29 @@ with tab_process:
                 with st.spinner(f"Detecting checkbox grid in {pdf_upload.name}..."):
                     item_results, raw = align_document_to_items(str(pdf_path), phase_items, str(response_dir))
 
-                if item_results is None:
-                    results_summary.append({
-                        "file": pdf_upload.name, "status": "FAILED to align",
-                        "detail": f"detected {raw.total_ticks_detected}, expected {raw.total_expected}",
-                    })
-                else:
-                    response_id = create_response(
-                        batch_id, source_pdf_filename=pdf_upload.name, pages_dir=str(response_dir),
-                        respondent_label=Path(pdf_upload.name).stem,
+                # Previously: a detected-total mismatch discarded every item
+                # (status "FAILED to align", nothing saved). Now always saves
+                # a response - undetected items are None/"conflict" rather
+                # than guessed, same as any other low-confidence item - and
+                # surfaces the mismatch as a status note instead of a dead
+                # end, since most of a response's items are usually still
+                # correctly read even when the total doesn't reconcile.
+                response_id = create_response(
+                    batch_id, source_pdf_filename=pdf_upload.name, pages_dir=str(response_dir),
+                    respondent_label=Path(pdf_upload.name).stem,
+                )
+                save_response_items(response_id, item_results)
+                n_flagged = sum(1 for r in item_results if r.confidence != "ok")
+                if raw.count_mismatch:
+                    status = f"response #{response_id} (count mismatch - review recommended)"
+                    detail = (
+                        f"detected {raw.total_ticks_detected} of {raw.total_expected} expected marks; "
+                        f"{n_flagged} of {len(item_results)} items flagged for review"
                     )
-                    save_response_items(response_id, item_results)
-                    n_flagged = sum(1 for r in item_results if r.confidence != "ok")
-                    results_summary.append({
-                        "file": pdf_upload.name, "status": f"response #{response_id}",
-                        "detail": f"{len(item_results)} items, {n_flagged} flagged",
-                    })
+                else:
+                    status = f"response #{response_id}"
+                    detail = f"{len(item_results)} items, {n_flagged} flagged"
+                results_summary.append({"file": pdf_upload.name, "status": status, "detail": detail})
 
             st.success(f"Processed {len(pdf_uploads)} file(s) into batch #{batch_id}.")
             st.table(results_summary)
@@ -229,6 +236,25 @@ with tab_process:
 
                 st.markdown("#### Likert items needing review")
                 response_items = get_response_items(response_id)
+                # Heuristic rather than a stored flag (avoids a DB migration
+                # for this fix): align_to_schema's undercount items all carry
+                # this exact note prefix (see checkbox_pipeline.py), so its
+                # presence means the detected total didn't match the
+                # schema's expected count for this response - positions from
+                # some point onward *could* be shifted, not just the items
+                # literally missing a mark, since the flattened-sequence
+                # design can't localize where a gap happened. Surfaced once,
+                # prominently, rather than only in the processing summary
+                # table (easy to miss) or burying the risk in each item's
+                # own caption.
+                if any((ri["note"] or "").startswith("not detected - only") for ri in response_items):
+                    st.warning(
+                        "This response's detected mark count didn't match the schema's expected "
+                        "count. Items below are flagged individually, but a mismatch like this can "
+                        "mean positions are shifted from some point onward, not just the flagged "
+                        "ones - please check the full list at the bottom of this page against the "
+                        "source PDF, not only the flagged items."
+                    )
                 flagged = [ri for ri in response_items if ri["confidence"] != "ok"]
                 if not flagged:
                     st.write("Nothing flagged — every item was detected with high confidence.")
