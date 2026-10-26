@@ -86,8 +86,10 @@ def find_answer_grid_columns(rgb: np.ndarray, min_run_frac: float = 0.08, right_
     text above/below never does - even where text accumulates a high
     total dark-pixel count, its longest single run is only ~15-20px,
     two orders of magnitude below any real gridline found this session).
-    Returns (left, right, col_bounds[6]) or None if no grid is found (e.g.
-    a half with no Likert table on it).
+    Returns (left, right, col_bounds[6], y_top, y_bottom) or None if no grid
+    is found (e.g. a half with no Likert table on it). y_top/y_bottom are
+    the gridlines' own measured vertical extent, for restricting ink search
+    to the real table instead of the whole half-page height.
 
     `min_run_frac` was 0.14 originally; lowered to 0.08 after finding a
     real case (PC_3, this session's user-reported issue) where camera
@@ -136,12 +138,23 @@ def find_answer_grid_columns(rgb: np.ndarray, min_run_frac: float = 0.08, right_
 
     xs_only = sorted(l[0] for l in lines)
     left, right = xs_only[0], xs_only[-1]
-    # A real 5-column Likert answer grid is reliably 217-234px wide across
-    # this session's whole sample; too narrow means these are unrelated
-    # lines (verified case: a demographics-page structure produced 6 evenly
-    # spaced lines only 80px wide total, after the min_run_frac lowering
-    # above made detection more permissive) rather than a real grid.
-    if right - left < 150:
+    # A real 5-column Likert answer grid is reliably ~17-19% of the
+    # half-page width (217-234px at 300dpi on this session's sample, out of
+    # a ~1275px half-page width) - a *relative* bound generalizes across
+    # scans at different resolutions/crops better than an absolute pixel
+    # count. A hardcoded `< 150px` absolute floor let through a real
+    # false positive on a different respondent's scan (BP_15.pdf): Part A's
+    # demographic table has its own unrelated full-height vertical line
+    # (the English/Hindi column divider) paired with the table's right
+    # border, 560px apart - comfortably past 150px, so it was accepted as
+    # a "grid" and real ink in that region (handwriting, checkboxes) got
+    # miscounted as 12 Likert ticks that don't exist. A generous window
+    # around the validated 17-19% core (12%-26%) keeps real grids across
+    # scan-to-scan variation while rejecting structures that are a
+    # different kind of thing entirely, like Part A's column divider.
+    half_width = rgb.shape[1]
+    grid_width = right - left
+    if not (0.12 * half_width <= grid_width <= 0.26 * half_width):
         return None
 
     if len(xs_only) == 6:
@@ -151,7 +164,32 @@ def find_answer_grid_columns(rgb: np.ndarray, min_run_frac: float = 0.08, right_
         # lines. Less accurate near boundaries, but the alignment step's
         # total-count check still catches gross misalignment.
         col_bounds = [left + (right - left) * i / 5 for i in range(6)]
-    return left, right, col_bounds
+
+    # The gridlines' own measured y-extent (already computed above as
+    # cur_starts/cur_ends, previously discarded) is the table's real
+    # vertical span. Found on BP_15.pdf: without this, ink detection
+    # searched the full half-page height (0..h), which on a half whose
+    # table starts partway down (after an intro paragraph, e.g. "Dear
+    # Student...") let that paragraph's own printed text get picked up as
+    # extra false ticks once ink detection also started catching plain
+    # darkness (see VALUE_DARK_THRESHOLD above) - black printed text has
+    # near-zero saturation so the old saturation-only mask never saw it,
+    # but it's still genuinely dark.
+    # Margin is generous (150px, not a token few pixels) because this
+    # estimate is built only from whichever gridlines were actually
+    # detected - on a skewed photo, different columns' gridlines start/end
+    # at different y's, and when some lines are missed entirely (the
+    # fragmentation case min_run_frac is already tuned around), the
+    # surviving lines' extent can undershoot the true table span by over
+    # 100px. Verified on BP_15.pdf: two genuine checkmarks sat 69px and
+    # 118px past a 20px-margin boundary and were wrongly excluded; the
+    # nearest real exclusion zone (intro paragraph text) is 491px further
+    # out, so 150px stays far short of ever re-admitting that paragraph
+    # while safely covering the observed skew undershoot.
+    MARGIN = 150
+    y_top = max(0, min(l[1] for l in lines) - MARGIN)
+    y_bottom = max(l[2] for l in lines) + MARGIN
+    return left, right, col_bounds, y_top, y_bottom
 
 
 # ---------- ink detection (calibrated, not hardcoded) ----------
@@ -180,6 +218,21 @@ def _otsu_threshold(values: np.ndarray, bins: int = 100) -> float:
     return float(edges[best_t])
 
 
+# A saturation-based mask alone can under-detect ink that reads as
+# weakly-saturated in a given photo (lighting, exposure, JPEG compression
+# all flatten color). Found on a real respondent's scan (BP_15.pdf): a
+# half-page with ~9 genuine checkmarks produced only 4 ink blobs via the
+# saturation mask (2 of which cleared min_pixels), while this fixed
+# darkness threshold alone found the same ~9 real marks as large
+# (170-340px) clusters, cleanly separated from thin gridline/boundary
+# noise (26-60px, already below min_pixels=80) by a wide margin. Used as
+# an OR with the saturation mask below, not a replacement - it only adds
+# coverage for weakly-saturated ink, never removes pixels the saturation
+# path already found, so documents where saturation worked well are
+# unaffected.
+VALUE_DARK_THRESHOLD = 0.6
+
+
 def detect_ink_mask(rgb: np.ndarray, region: tuple[int, int, int, int]) -> tuple[np.ndarray, float]:
     """region = (y0, y1, x0, x1) - the answer-grid bounding box to calibrate
     and search within. Returns (boolean ink mask over the FULL image, the
@@ -198,7 +251,7 @@ def detect_ink_mask(rgb: np.ndarray, region: tuple[int, int, int, int]) -> tuple
     else:
         threshold = max(0.12, _otsu_threshold(region_sat[dark]))
 
-    mask = (sat > threshold) & (val < 0.9)
+    mask = ((sat > threshold) & (val < 0.9)) | (val < VALUE_DARK_THRESHOLD)
     return mask, threshold
 
 
@@ -280,8 +333,8 @@ def process_half(rgb: np.ndarray, source_label: str) -> HalfResult:
     grid = find_answer_grid_columns(rgb)
     if grid is None:
         return HalfResult(source=source_label, half_height=h, ticks=[])
-    left, right, col_bounds = grid
-    region = (0, h, max(0, left - 10), min(rgb.shape[1], right + 10))
+    left, right, col_bounds, y_top, y_bottom = grid
+    region = (y_top, y_bottom, max(0, left - 10), min(rgb.shape[1], right + 10))
     mask, _threshold = detect_ink_mask(rgb, region)
     ticks = cluster_ticks(mask, region, col_bounds)
     return HalfResult(source=source_label, half_height=h, ticks=ticks)
